@@ -1,35 +1,104 @@
 import streamlit as st
 import pandas as pd
 import joblib
+import os
 
-# Charger le modèle
-model = joblib.load("financial_inclusion_model.pkl")
+# --- 1. CONFIGURATION ---
+st.set_page_config(page_title="Inclusion Financière Afrique", page_icon="💰", layout="centered")
 
-st.title("💰 Prédiction d’Inclusion Financière")
+def local_css():
+    st.markdown("""
+        <style>
+        .main { background-color: #f8f9fa; }
+        .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #007bff; color: white; }
+        .result-card { padding: 20px; border-radius: 10px; border: 1px solid #ddd; background-color: white; }
+        </style>
+        """, unsafe_allow_html=True)
 
-st.write("Veuillez entrer les informations du répondant")
+local_css()
 
-# Champs de saisie (exemples)
-country = st.number_input("Pays", min_value=0)
-year = st.number_input("Année", min_value=2000, max_value=2030)
-age = st.number_input("Âge", min_value=10, max_value=100)
-gender = st.selectbox("Genre", [0, 1])
-education = st.number_input("Niveau d’éducation", min_value=0)
-job_type = st.number_input("Type d’emploi", min_value=0)
+# --- 2. CONSTANTES & MAPPINGS ---
+# Centraliser les données facilite la mise à jour sans toucher à la logique de calcul
+MAPPINGS = {
+    "country": ["Burundi", "Djibouti", "Érythrée", "Éthiopie", "Kenya", "Ouganda", "Rwanda", "Somalie", "Soudan du Sud", "Tanzanie"],
+    "education": ["Aucun", "Primaire", "Secondaire", "Supérieur"],
+    "job": ["Sans emploi", "Employé", "Indépendant", "Agriculteur", "Autre"],
+    "gender": {"Homme": 1, "Femme": 0}
+}
 
-# Bouton
-if st.button("Prédire"):
-    input_data = pd.DataFrame([[country, year, age, gender, education, job_type]],
-                              columns=[
-                                  "country", "year", "age_of_respondent",
-                                  "gender_of_respondent",
-                                  "education_level",
-                                  "job_type"
-                              ])
+# --- 3. LOGIQUE MÉTIER ---
+@st.cache_resource
+def load_model(path="financial_inclusion_model.pkl"):
+    if not os.path.exists(path):
+        return None
+    return joblib.load(path)
 
-    prediction = model.predict(input_data)
+model = load_model()
 
-    if prediction[0] == 1:
-        st.success("✅ Le répondant possède un compte bancaire")
-    else:
-        st.warning("❌ Le répondant ne possède pas de compte bancaire")
+# --- 4. INTERFACE ---
+st.title("💰 Prédiction d'Inclusion Financière")
+st.markdown("Estimez la probabilité d'accès aux services bancaires en Afrique de l'Est.")
+
+if model is None:
+    st.error("❌ **Fichier modèle introuvable.** Veuillez placer `financial_inclusion_model.pkl` à la racine.")
+    st.stop()
+
+# Utilisation de colonnes pour un formulaire plus compact
+with st.container():
+    st.subheader("📋 Profil de l'individu")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        country = st.selectbox("🌍 Pays", MAPPINGS["country"])
+        age = st.slider("🎂 Âge", 18, 100, 30)
+        gender = st.radio("👤 Genre", list(MAPPINGS["gender"].keys()), horizontal=True)
+    
+    with col2:
+        education = st.selectbox("🎓 Niveau d'études", MAPPINGS["education"])
+        job = st.selectbox("💼 Type d'emploi", MAPPINGS["job"])
+        year = st.number_input("📅 Année de référence", 2010, 2030, 2024)
+
+    predict_btn = st.button("🔍 Analyser le profil")
+
+# --- 5. TRAITEMENT & RÉSULTATS ---
+if predict_btn:
+    try:
+        # Encodage propre via les index des listes de mapping
+        input_df = pd.DataFrame([{
+            "country": MAPPINGS["country"].index(country),
+            "year": year,
+            "age_of_respondent": age,
+            "gender_of_respondent": MAPPINGS["gender"][gender],
+            "education_level": MAPPINGS["education"].index(education),
+            "job_type": MAPPINGS["job"].index(job)
+        }])
+
+        # Inférence avec spinner pour le feedback visuel
+        with st.spinner('Analyse en cours...'):
+            prob = model.predict_proba(input_df)[0][1]
+            is_banked = model.predict(input_df)[0]
+
+        st.markdown("---")
+        
+        # Affichage stylisé
+        res_col1, res_col2 = st.columns([1, 1])
+        
+        with res_col1:
+            if is_banked == 1:
+                st.success("### ✅ Accès probable")
+                st.write("L'individu correspond au profil type des utilisateurs bancarisés.")
+            else:
+                st.warning("### ❌ Accès limité")
+                st.write("L'individu pourrait rencontrer des freins à l'inclusion financière.")
+        
+        with res_col2:
+            st.metric("Indice de confiance", f"{prob:.1%}")
+            st.progress(prob)
+
+        # Expander pour plus de détails techniques
+        with st.expander("🔬 Détails techniques"):
+            st.json(input_df.to_dict(orient='records')[0])
+            st.write("Le modèle utilise un algorithme de classification pour pondérer les facteurs socio-économiques.")
+
+    except Exception as e:
+        st.error(f"Une erreur est survenue lors de la prédiction : {e}")
